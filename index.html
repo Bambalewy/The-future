@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The Future</title>
+<meta name="theme-color" content="#FFE600">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="The Future">
+<style>
+  :root{--bg:#FFF8E1;--ink:#1B1D21;--muted:#6B6B6B;--y:#FFE600}
+  @media (prefers-color-scheme: dark){:root{--bg:#15140F;--ink:#F4F1E6;--muted:#8E8A7C}}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:system-ui,Arial,sans-serif}
+  iframe{position:fixed;inset:0;width:100%;height:100%;border:0;background:var(--bg)}
+  .box{max-width:460px;margin:0 auto;padding:calc(env(safe-area-inset-top) + 40px) 20px 30px}
+  .eq{display:inline-block;background:var(--y);color:#1B1D21;font-weight:900;letter-spacing:.14em;font-size:13px;padding:6px 10px;border-radius:6px;border:1.5px solid #1B1D21}
+  h1{font-size:28px;margin:16px 0 6px;font-weight:900;letter-spacing:-.02em}
+  p{color:var(--muted);line-height:1.45;font-size:15px}
+  input{width:100%;box-sizing:border-box;font:inherit;padding:13px 12px;border-radius:12px;border:1.5px solid #CFC6A8;background:#fff;color:#1B1D21;margin:8px 0}
+  button{width:100%;font:inherit;font-weight:900;font-size:16px;padding:14px;border-radius:14px;border:2px solid #1B1D21;background:var(--y);color:#1B1D21;margin-top:6px}
+  .err{color:#C62828;font-weight:700;font-size:14px;min-height:20px}
+  .hide{display:none}
+  #reset{position:fixed;top:0;left:0;width:44px;height:44px;z-index:5;opacity:0}
+</style>
+</head>
+<body>
+<div id="setup" class="box hide">
+  <span class="eq">EQUILIBRIO</span>
+  <h1>The future</h1>
+  <p>Incolla il link della tua app (Apps Script → Esegui il deployment → Gestisci deployment → URL, quello che finisce con <b>/exec</b>). Lo chiedo solo la prima volta e resta salvato su questo telefono.</p>
+  <input id="url" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off" autocapitalize="off" spellcheck="false">
+  <div class="err" id="err"></div>
+  <button id="save">Apri The future</button>
+</div>
+<div id="offline" class="box hide">
+  <span class="eq">EQUILIBRIO</span>
+  <h1>Sei offline</h1>
+  <p>The future ha bisogno di internet per leggere il tuo foglio. Riprova appena torna la connessione.</p>
+  <button onclick="location.reload()">Riprova</button>
+</div>
+<div id="reset" title="Tocca 5 volte per cambiare link"></div>
+<script>
+  var KEY = 'tf_app_url';
+  function get(){ try { return localStorage.getItem(KEY) || ''; } catch (e) { return ''; } }
+  function set(v){ try { localStorage.setItem(KEY, v); } catch (e) {} }
+  function valid(u){ return /^https:\/\/script\.google\.com\/(a\/[^/]+\/)?macros\/s\/[\w-]+\/exec\/?(\?.*)?$/.test(u); }
+  function show(id){ document.getElementById(id).classList.remove('hide'); }
+  function start(){
+    var u = get();
+    if (location.search.indexOf('setup') >= 0 || !valid(u)) { show('setup'); document.getElementById('url').value = u; return; }
+    if (!navigator.onLine) { show('offline'); return; }
+    var f = document.createElement('iframe');
+    f.src = u; f.title = 'The future';
+    f.setAttribute('allow', 'clipboard-write');
+    document.body.appendChild(f);
+  }
+  document.getElementById('save').onclick = function(){
+    var u = document.getElementById('url').value.trim();
+    if (!valid(u)) { document.getElementById('err').textContent = 'Il link deve iniziare con https://script.google.com/macros/s/ e finire con /exec'; return; }
+    set(u); location.replace(location.pathname);
+  };
+  // tocca 5 volte l'angolo in alto a sinistra per cambiare il link
+  var taps = 0, tt;
+  document.getElementById('reset').addEventListener('click', function(){
+    taps++; clearTimeout(tt); tt = setTimeout(function(){ taps = 0; }, 1500);
+    if (taps >= 5) location.href = location.pathname + '?setup=1';
+  });
+  window.addEventListener('online', function(){ if (!document.querySelector('iframe')) location.reload(); });
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function(){});
+  start();
+</script>
+</body>
+</html>
