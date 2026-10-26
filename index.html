@@ -21,9 +21,18 @@
   p{color:var(--muted);line-height:1.45;font-size:15px}
   input{width:100%;box-sizing:border-box;font:inherit;padding:13px 12px;border-radius:12px;border:1.5px solid #CFC6A8;background:#fff;color:#1B1D21;margin:8px 0}
   button{width:100%;font:inherit;font-weight:900;font-size:16px;padding:14px;border-radius:14px;border:2px solid #1B1D21;background:var(--y);color:#1B1D21;margin-top:6px}
+  button.ghost{background:transparent;color:var(--ink);border-color:var(--muted);font-weight:700}
   .err{color:#C62828;font-weight:700;font-size:14px;min-height:20px}
-  .hide{display:none}
+  .hide{display:none!important}
   #reset{position:fixed;top:0;left:0;width:44px;height:44px;z-index:5;opacity:0}
+  /* schermata di blocco: copre l'app (che resta caricata sotto) */
+  #lock{position:fixed;inset:0;z-index:20;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:24px}
+  #lock .fp{width:96px;height:96px;border-radius:50%;background:var(--y);border:2px solid #1B1D21;display:flex;align-items:center;justify-content:center;margin:26px auto 18px;cursor:pointer}
+  #lock .fp svg{width:54px;height:54px}
+  #lock .inner{max-width:340px;width:100%}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:22px;padding-top:18px;border-top:1.5px solid #CFC6A8}
+  .row b{display:block}
+  .row button{width:auto;padding:10px 14px;font-size:14px;margin:0}
 </style>
 </head>
 <body>
@@ -34,41 +43,157 @@
   <input id="url" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off" autocapitalize="off" spellcheck="false">
   <div class="err" id="err"></div>
   <button id="save">Apri The future</button>
+  <div class="row" id="lockRow">
+    <div><b>Blocco con impronta</b><span class="small" id="lockState" style="color:var(--muted);font-size:14px"></span></div>
+    <button class="ghost" id="lockToggle"></button>
+  </div>
 </div>
+
+<div id="ask" class="box hide">
+  <span class="eq">EQUILIBRIO</span>
+  <h1>Proteggi l'app con l'impronta?</h1>
+  <p>Come nelle app della banca: ogni volta che apri The future (o ci torni dopo qualche minuto) ti chiede l'impronta. Se l'impronta non va, puoi usare il PIN del telefono.</p>
+  <div class="err" id="askErr"></div>
+  <button id="askYes">Attiva impronta</button>
+  <button class="ghost" id="askNo">Non ora</button>
+</div>
+
 <div id="offline" class="box hide">
   <span class="eq">EQUILIBRIO</span>
   <h1>Sei offline</h1>
   <p>The future ha bisogno di internet per leggere il tuo foglio. Riprova appena torna la connessione.</p>
   <button onclick="location.reload()">Riprova</button>
 </div>
-<div id="reset" title="Tocca 5 volte per cambiare link"></div>
+
+<div id="lock" class="hide">
+  <div class="inner">
+    <span class="eq">EQUILIBRIO</span>
+    <h1>The future</h1>
+    <div class="fp" id="fpBtn" role="button" aria-label="Sblocca con l'impronta">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#1B1D21" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 11c0 3.5-1 6.5-2.5 9"/><path d="M8.5 7.5A5 5 0 0 1 17 11c0 1.6-.1 3.1-.4 4.5"/><path d="M5 9.5a7.5 7.5 0 0 1 14.6 1.5c0 .8 0 1.6-.1 2.4"/><path d="M7 12c0 2.6-.6 5-1.7 7"/><path d="M14.5 13c-.1 2.9-.8 5.6-2 8"/><path d="M4.5 5.5A10 10 0 0 1 21 7.5"/></svg>
+    </div>
+    <p id="lockMsg">Tocca per sbloccare con l'impronta</p>
+    <div class="err" id="lockErr"></div>
+  </div>
+</div>
+
+<div id="reset" title="Tocca 5 volte per le impostazioni"></div>
 <script>
-  var KEY = 'tf_app_url';
-  function get(){ try { return localStorage.getItem(KEY) || ''; } catch (e) { return ''; } }
-  function set(v){ try { localStorage.setItem(KEY, v); } catch (e) {} }
+  var KEY = 'tf_app_url', LKEY = 'tf_lock_cred', ASKED = 'tf_lock_asked', HIDDEN_AT = 0;
+  var RELOCK_MS = 2 * 60 * 1000; // torni nell'app dopo più di 2 minuti → richiede di nuovo l'impronta
+  function ls(k, v){ try { if (v === undefined) return localStorage.getItem(k) || ''; if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) { return ''; } }
   function valid(u){ return /^https:\/\/script\.google\.com\/(a\/[^/]+\/)?macros\/s\/[\w-]+\/exec\/?(\?.*)?$/.test(u); }
-  function show(id){ document.getElementById(id).classList.remove('hide'); }
-  function start(){
-    var u = get();
-    if (location.search.indexOf('setup') >= 0 || !valid(u)) { show('setup'); document.getElementById('url').value = u; return; }
+  function $(id){ return document.getElementById(id); }
+  function show(id){ $(id).classList.remove('hide'); }
+  function hide(id){ $(id).classList.add('hide'); }
+
+  // ---------- impronta (WebAuthn, autenticatore del telefono) ----------
+  function b64u(buf){ return btoa(String.fromCharCode.apply(null, new Uint8Array(buf))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
+  function unb64u(s){ s = s.replace(/-/g,'+').replace(/_/g,'/'); while (s.length % 4) s += '='; var b = atob(s), a = new Uint8Array(b.length); for (var i = 0; i < b.length; i++) a[i] = b.charCodeAt(i); return a.buffer; }
+  function rnd(n){ var a = new Uint8Array(n); crypto.getRandomValues(a); return a; }
+  function canBio(){
+    if (!window.PublicKeyCredential || !PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable) return Promise.resolve(false);
+    return PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable().catch(function(){ return false; });
+  }
+  function bioRegister(){
+    return navigator.credentials.create({ publicKey: {
+      challenge: rnd(32),
+      rp: { name: 'The Future' },
+      user: { id: rnd(16), name: 'the-future', displayName: 'The Future' },
+      pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+      authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'discouraged' },
+      timeout: 60000, attestation: 'none'
+    }}).then(function(c){ ls(LKEY, b64u(c.rawId)); });
+  }
+  function bioCheck(){
+    return navigator.credentials.get({ publicKey: {
+      challenge: rnd(32),
+      allowCredentials: [{ type: 'public-key', id: unb64u(ls(LKEY)) }],
+      userVerification: 'required', timeout: 60000
+    }});
+  }
+  function bioErr(e){
+    var n = e && e.name;
+    if (n === 'NotAllowedError') return 'Annullato o impronta non riconosciuta. Tocca per riprovare.';
+    if (n === 'InvalidStateError') return 'Impronta già registrata su questo telefono.';
+    return 'Errore: ' + (e && e.message || e);
+  }
+
+  // ---------- blocco ----------
+  var unlocking = false, afterUnlock = null;
+  function lockNow(then){
+    afterUnlock = then || null;
+    var f = document.querySelector('iframe'); if (f) f.style.visibility = 'hidden';
+    $('lockErr').textContent = ''; show('lock'); unlock();
+  }
+  function unlock(){
+    if (unlocking) return; unlocking = true;
+    bioCheck().then(function(){
+      hide('lock'); var f = document.querySelector('iframe'); if (f) f.style.visibility = '';
+      var cb = afterUnlock; afterUnlock = null; if (cb) cb();
+    }).catch(function(e){ $('lockErr').textContent = bioErr(e); })
+      .then(function(){ unlocking = false; });
+  }
+  $('fpBtn').onclick = unlock;
+  document.addEventListener('visibilitychange', function(){
+    if (!ls(LKEY)) return;
+    if (document.visibilityState === 'hidden') HIDDEN_AT = Date.now();
+    else if (HIDDEN_AT && Date.now() - HIDDEN_AT > RELOCK_MS && $('lock').classList.contains('hide')) lockNow();
+  });
+
+  // ---------- avvio ----------
+  function openApp(){
+    var u = ls(KEY);
     if (!navigator.onLine) { show('offline'); return; }
+    if (document.querySelector('iframe')) return;
     var f = document.createElement('iframe');
     f.src = u; f.title = 'The future';
     f.setAttribute('allow', 'clipboard-write');
     document.body.appendChild(f);
   }
-  document.getElementById('save').onclick = function(){
-    var u = document.getElementById('url').value.trim();
-    if (!valid(u)) { document.getElementById('err').textContent = 'Il link deve iniziare con https://script.google.com/macros/s/ e finire con /exec'; return; }
-    set(u); location.replace(location.pathname);
+  function showSetup(){
+    show('setup'); $('url').value = ls(KEY);
+    canBio().then(function(ok){
+      if (!ok) { $('lockState').textContent = ' Non disponibile su questo dispositivo'; hide('lockToggle'); return; }
+      var on = !!ls(LKEY);
+      $('lockState').textContent = on ? ' Attivo' : ' Spento';
+      $('lockToggle').textContent = on ? 'Disattiva' : 'Attiva';
+      show('lockToggle');
+    });
+  }
+  $('lockToggle').onclick = function(){
+    if (ls(LKEY)) { ls(LKEY, null); showSetup(); return; } // per arrivare qui hai già usato l'impronta
+    bioRegister().then(function(){ ls(ASKED, '1'); showSetup(); }).catch(function(e){ $('err').textContent = bioErr(e); });
   };
-  // tocca 5 volte l'angolo in alto a sinistra per cambiare il link
+  function afterUrl(){
+    // prima volta con un URL valido: propongo l'impronta (una sola volta)
+    if (ls(LKEY) || ls(ASKED)) { openApp(); return; }
+    canBio().then(function(ok){ if (!ok) { openApp(); return; } show('ask'); });
+  }
+  $('askYes').onclick = function(){
+    bioRegister().then(function(){ ls(ASKED, '1'); hide('ask'); openApp(); })
+      .catch(function(e){ $('askErr').textContent = bioErr(e); });
+  };
+  $('askNo').onclick = function(){ ls(ASKED, '1'); hide('ask'); openApp(); };
+
+  function start(){
+    var wantSetup = location.search.indexOf('setup') >= 0 || !valid(ls(KEY));
+    var go = wantSetup ? showSetup : afterUrl;
+    // con l'impronta attiva anche le impostazioni sono protette
+    if (ls(LKEY)) lockNow(go); else go();
+  }
+  $('save').onclick = function(){
+    var u = $('url').value.trim();
+    if (!valid(u)) { $('err').textContent = 'Il link deve iniziare con https://script.google.com/macros/s/ e finire con /exec'; return; }
+    ls(KEY, u); location.replace(location.pathname);
+  };
+  // tocca 5 volte l'angolo in alto a sinistra per le impostazioni (link e impronta)
   var taps = 0, tt;
-  document.getElementById('reset').addEventListener('click', function(){
+  $('reset').addEventListener('click', function(){
     taps++; clearTimeout(tt); tt = setTimeout(function(){ taps = 0; }, 1500);
     if (taps >= 5) location.href = location.pathname + '?setup=1';
   });
-  window.addEventListener('online', function(){ if (!document.querySelector('iframe')) location.reload(); });
+  window.addEventListener('online', function(){ if (!document.querySelector('iframe') && $('lock').classList.contains('hide') && valid(ls(KEY))) location.reload(); });
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function(){});
   start();
 </script>
