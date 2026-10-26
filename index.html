@@ -147,6 +147,9 @@
     if (!navigator.onLine) { show('offline'); return; }
     if (document.querySelector('iframe')) return;
     var f = document.createElement('iframe');
+    // scorciatoie dell'icona (tieni premuto): ?azione=spesa|entrata|giro → l'app apre subito il modulo
+    var az = (/[?&]azione=(spesa|entrata|giro)\b/.exec(location.search) || [])[1];
+    if (az) { u += (u.indexOf('?') >= 0 ? '&' : '?') + 'azione=' + az; try { history.replaceState(null, '', location.pathname); } catch (e) {} }
     f.src = u; f.title = 'The future';
     f.setAttribute('allow', 'clipboard-write');
     document.body.appendChild(f);
